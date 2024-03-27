@@ -1,7 +1,6 @@
 use std::{any::Any, clone, ops::Deref, sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration, vec};
 use rand::Rng;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use crate::body::user;
 
 #[derive(Debug,Clone)] 
 #[allow(unused_variables)]
@@ -102,7 +101,7 @@ fn user_request(id:i8,stock_list: Arc<Mutex<Vec<Stock>>>)-> User{
     let stocks = stock_list.lock().unwrap();
     let stock = &stocks[rng.gen_range(0..60)];
     let stockname = stock.name.clone();
-    let bidprice = stock.value * (1.0 + rng.gen_range(0.0..=1.0)); 
+    let bidprice = stock.value; 
     let takeprofit = stock.value *  (1.0 + rng.gen_range(0.15..=2.0)); 
     let cutloss = stock.value *  (1.0 - rng.gen_range(0.12..=0.4)); 
     // let hldtime = rng.gen_range(3..8);
@@ -111,18 +110,30 @@ fn user_request(id:i8,stock_list: Arc<Mutex<Vec<Stock>>>)-> User{
     User{id:id,stock_name:stockname,bid_price:bidprice,take_profit:takeprofit,cut_loss:cutloss,num_stock:numstock}
 }
 
+fn iterate_stock_list(share_stock: &Arc<Mutex<Vec<Stock>>>,stock_name:String,bid_price:f64)-> Option<Stock>{
+    let stock = share_stock.lock().unwrap();
+    for s in stock.iter(){
+        if s.name == stock_name && s.value == bid_price{
+            return Some(s.clone())
+        }
+    }
+    None
+}
 
 pub fn stock_sim(){
     // Define channel
     let (sl_tx,sl_rx) = channel(); // #NOTE: direct access stock vector
+    // let (sl_tx,sl_rx) = unbounded(); // #NOTE: direct access stock vector
+    // let sl_rx2 = sl_rx.clone();
     // let (br_ex_tx,br_ex_rx) = channel(); // broker & exchange
     // let (br_usr_tx,br_usr_rx) = unbounded(); // user & brokers 
     // let br_usr_rx2 = br_usr_rx.clone();
     let (br_usr_tx, br_usr_rx): (Sender<User>, Receiver<User>) = unbounded(); // user & brokers channel
-    let br_usr_rx2 = br_usr_rx.clone(); 
+    // let br_usr_rx2 = br_usr_rx.clone(); // clone receive channel for broker 2
     // vector list
     let stocks = prep_stock_list();
     let shared_stocks = Arc::new(Mutex::new(stocks));
+    let stock_list = shared_stocks.clone(); 
 
     // Exhanges
     thread::spawn(move||{
@@ -140,6 +151,17 @@ pub fn stock_sim(){
             match br_usr_rx.try_recv(){
                 Ok(request_list) => {
                     println!("Broker 1: had received order from User{:?}",request_list.id); // user list
+                    // check price
+                    let chosen_stock = iterate_stock_list(&stock_list, request_list.stock_name,request_list.bid_price);
+                    match chosen_stock{
+                        Some(chosen_stock)=>{
+                            println!("User preferences stock: {}",request_list.id);
+                            println!("Stock name: {}",chosen_stock.name);
+                        }
+                        None =>{
+                            println!("Budget over?")
+                        }    
+                    }
                 }
                 Err(_)=>{
                     println!("Broker 1: Waiting for order..");
@@ -151,19 +173,20 @@ pub fn stock_sim(){
 
     // 2. Brokers
     // br_usr_rx2
-    thread::spawn(move||{
-        loop{
-            match br_usr_rx2.try_recv(){
-                Ok(request_list) => {
-                    println!("Broker 2: had received order from User{:?}",request_list.id); // user list
-                }
-                Err(_)=>{
-                    println!("Broker 2: Waiting for order..");
-                    thread::sleep(Duration::from_secs(1));   
-                }
-            }
-        }
-    });
+    // thread::spawn(move||{
+    //     loop{
+    //         match br_usr_rx2.try_recv(){
+    //             Ok(request_list) => {
+    //                 println!("Broker 2: had received order from User{:?}",request_list.id); // user list
+    //             }
+    //             Err(_)=>{
+    //                 println!("Broker 2: Waiting for order..");
+    //                 thread::sleep(Duration::from_secs(1));   
+    //             }
+    //         }
+    //     }
+    // });
+    
     // Users
     thread::spawn(move||{
         for i in 1..11{
