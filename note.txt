@@ -1,60 +1,24 @@
-let apple = Stock { name: String::from("apl"), value: 101 };
-        let microsoft = Stock { name: String::from("mst"), value: 91 };
-        let dell = Stock { name: String::from("dell"), value: 73 };
-        let ibm = Stock { name: String::from("ibm"), value: 51 };
-        let petg = Stock { name: String::from("petg"), value: 82 };
-        let mly = Stock { name: String::from("mly"), value: 65 };
-        let max = Stock { name: String::from("max"), value: 44 };
-        let gnt = Stock { name: String::from("gnt"), value: 77 };
-        let airm = Stock { name: String::from("airm"), value: 89 };
-        let bbt = Stock { name: String::from("bbt"), value: 60 };
-        let tpx = Stock { name: String::from("tpx"), value: 72 };
-        let mmh = Stock { name: String::from("mmh"), value: 55 };
-        let sunr = Stock { name: String::from("sunr"), value: 68 };
-        let kct = Stock { name: String::from("kct"), value: 93 };
-        let pgg = Stock { name: String::from("pgg"), value: 78 };
-        let tem = Stock { name: String::from("tem"), value: 81 };
-        let sbc = Stock { name: String::from("sbc"), value: 47 };
-        let cmn = Stock { name: String::from("cmn"), value: 64 };
-        let smb = Stock { name: String::from("smb"), value: 70 };
-        let jlg = Stock { name: String::from("jlg"), value: 85 };
-        let cap = Stock { name: String::from("cap"), value: 49 };
-        let gmx = Stock { name: String::from("gmx"), value: 76 };
-        let ant = Stock { name: String::from("ant"), value: 67 };
-        let bbl = Stock { name: String::from("bbl"), value: 90 };
-        let mmc = Stock { name: String::from("mmc"), value: 58 };
-        let dph = Stock { name: String::from("dph"), value: 71 };
-        let szb = Stock { name: String::from("szb"), value: 83 };
-        let fsl = Stock { name: String::from("fsl"), value: 52 };
-        let pcb = Stock { name: String::from("pcb"), value: 74 };
-        let sjc = Stock { name: String::from("sjc"), value: 69 };
-        let sel = Stock { name: String::from("sel"), value: 87 };
-        let pwr = Stock { name: String::from("pwr"), value: 63 };
-        let klh = Stock { name: String::from("klh"), value: 80 };
-        let svm = Stock { name: String::from("svm"), value: 54 };
-        let rbx = Stock { name: String::from("rbx"), value: 86 };
-        let grd = Stock { name: String::from("grd"), value: 50 };
-        let tep = Stock { name: String::from("tep"), value: 75 };
-        let nmb = Stock { name: String::from("nmb"), value: 62 };
-        let tlc = Stock { name: String::from("tlc"), value: 79 };
-        let apm = Stock { name: String::from("apm"), value: 53 };
-        let ktm = Stock { name: String::from("ktm"), value: 48 };
-        let bnt = Stock { name: String::from("bnt"), value: 66 };
-        let pdm = Stock { name: String::from("pdm"), value: 91 };
-        let qlt = Stock { name: String::from("qlt"), value: 84 };
-        let trn = Stock { name: String::from("trn"), value: 61 };
-        let txl = Stock { name: String::from("txl"), value: 88 };
-        let mnt = Stock { name: String::from("mnt"), value: 59 };
-        let kbb = Stock { name: String::from("kbb"), value: 46 };
-        let snc = Stock { name: String::from("snc"), value: 72 };
-        let gmp = Stock { name: String::from("gmp"), value: 81 };
-        let npx = Stock { name: String::from("npx"), value: 73 };
-        let sln = Stock { name: String::from("sln"), value: 54 };
-        let mbt = Stock { name: String::from("mbt"), value: 67 };
-        let gkt = Stock { name: String::from("gkt"), value: 92 };
-        let pld = Stock { name: String::from("pld"), value: 75 };
-        let nff = Stock { name: String::from("nff"), value: 60 };
-        let zmx = Stock { name: String::from("zmx"), value: 78 };
-        let bpc = Stock { name: String::from("bpc"), value: 83 };
-        let klb = Stock { name: String::from("klb"), value: 45 };
-        let bsn = Stock { name: String::from("bsn"), value: 74 };
+            // Get purchaase info from broker and update to stock profile
+            let timeout_purchasing_monitor = Duration::from_secs(5); // Adjust as needed
+            loop{
+                match ex_pur_recv.receiver().recv_timeout(timeout_purchasing_monitor) {
+                    Ok (ul)=>{
+                        match ul{
+                            ConsumerMessage::Delivery(delivery)=>{
+                                let body = String::from_utf8_lossy(&delivery.body);
+                                println!("**1");
+                                let user_list: User= serde_json::from_str(&body).expect("Failed to desialize");
+                                StockProfile::add_stock_profile(user_list.stock_name, 0,user_list.num_stock);
+                                ex_pur_recv.ack(delivery)?;
+                            }
+                            other =>{
+                                println!("Exchange ended here{:?}",other);
+                                break;
+                            }
+                        }
+                    }
+                    Err(_)=>{
+                        break;
+                    }
+                }
+            }
