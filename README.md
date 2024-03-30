@@ -20,6 +20,6 @@ Languages
 
 
 # Todo:
-- Infinity loop in stocks
-- stock price randomly decrease we got too many stocks, cut loss had to try [Check whether nid decrease every time] // create a var to triggered this
-
+- Clean up the command in stock.rs
+- Final run thru
+- See whether nid change to crossbeam unbounb :)

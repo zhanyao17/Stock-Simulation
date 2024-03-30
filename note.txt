@@ -1,24 +1,211 @@
-            // Get purchaase info from broker and update to stock profile
+let no_cust_clone = Arc::clone(&no_cust_ex);
+let ex_final_ex_clone = Arc::clone(&ex_final_ex);
+let connection_clone = Arc::clone(&connection);
+
+sched.execute_at_fixed_rate(
+    Duration::from_secs(0),
+    Duration::from_secs(period),
+    move || {
+        /* ---------------------- Sender & Connection--------------------- */
+        // Define connections
+        let mut connection = connection_clone.lock().unwrap();
+
+        // Triggered stock news
+        let mut trig_news = 0;
+
+        // Define sender
+        let ex_br_mq = connection.open_channel(None).expect("Failed to open channel");
+        let send_stock_list = Exchange::direct(&ex_br_mq);
+
+        /* ---------------------- receiver--------------------- */
+        // Define queue for exchange to receive stock's vol info
+        let stock_pur_vol = ex_br_mq
+            .queue_declare("updatePurVol", QueueDeclareOptions::default())
+            .expect("Failed to declare queue");
+        let stock_sold_vol = ex_br_mq
+            .queue_declare("updateSoldVol", QueueDeclareOptions::default())
+            .expect("Failed to declare queue");
+
+        let ex_pur_recv = stock_pur_vol
+            .consume(ConsumerOptions::default())
+            .expect("Failed to consume");
+        let ex_sell_recv = stock_sold_vol
+            .consume(ConsumerOptions::default())
+            .expect("Failed to consume");
+
+        loop {
+            // Detect ending
+            let mut ending = 0;
+            trig_news += 1;
+
+            // Send list for customer
+            println!("Exchange: Stock list publishing..");
+            thread::sleep(Duration::from_secs(1));
+
+            let no_cust_val = {
+                let guard = no_cust_clone.lock().unwrap();
+                *guard
+            };
+
+            if no_cust_val < 10 {
+                sl_tx.send(STOCK_LIST.clone()).unwrap();
+            } // prevent threads panic
+
+            // Send stock list to broker
+            let clone_stock_arc = Arc::clone(&STOCK_LIST);
+            let vec_stock_list = clone_stock_arc.lock().unwrap().clone();
+            let stock_list_json =
+                serde_json::to_string(&vec_stock_list).expect("Failed to serialize");
+            send_stock_list
+                .publish(Publish::new(stock_list_json.as_bytes(), "sentStockInfoBrk1"))
+                .expect("Failed to publish");
+            send_stock_list
+                .publish(Publish::new(stock_list_json.as_bytes(), "sentStockInfoBrk2"))
+                .expect("Failed to publish");
+            println!("Exchange: Had send stock list to broker1 & 2");
+
+            // Get purchase info from broker and update to stock profile
             let timeout_purchasing_monitor = Duration::from_secs(5); // Adjust as needed
-            loop{
+            loop {
                 match ex_pur_recv.receiver().recv_timeout(timeout_purchasing_monitor) {
-                    Ok (ul)=>{
-                        match ul{
-                            ConsumerMessage::Delivery(delivery)=>{
+                    Ok(ul) => {
+                        match ul {
+                            ConsumerMessage::Delivery(delivery) => {
+                                ending -= 1;
                                 let body = String::from_utf8_lossy(&delivery.body);
-                                println!("**1");
-                                let user_list: User= serde_json::from_str(&body).expect("Failed to desialize");
-                                StockProfile::add_stock_profile(user_list.stock_name, 0,user_list.num_stock);
-                                ex_pur_recv.ack(delivery)?;
+                                let user_list: User =
+                                    serde_json::from_str(&body).expect("Failed to deserialize");
+                                StockProfile::add_stock_profile(
+                                    user_list.stock_name,
+                                    0,
+                                    user_list.num_stock,
+                                );
+                                ex_pur_recv.ack(delivery).expect("Failed to ack");
                             }
-                            other =>{
-                                println!("Exchange ended here{:?}",other);
+                            other => {
+                                println!("Exchange ended here{:?}", other);
                                 break;
                             }
                         }
                     }
-                    Err(_)=>{
+                    Err(_) => {
+                        println!(
+                            "Exchange - update pur vol: Timeout reached. No message received."
+                        );
+                        ending += 1;
                         break;
                     }
                 }
             }
+
+            // Update sell vol
+            let timeout_selling_monitor = Duration::from_secs(5);
+            loop {
+                match ex_sell_recv.receiver().recv_timeout(timeout_selling_monitor) {
+                    Ok(ul) => {
+                        match ul {
+                            ConsumerMessage::Delivery(delivery) => {
+                                ending = 0;
+                                let body = String::from_utf8_lossy(&delivery.body);
+                                let received_stocks: Vec<(String, i128)> =
+                                    serde_json::from_str(&body).expect("Failed to deserialize");
+                                StockProfile::update_sell_vol(received_stocks.clone());
+                                ex_sell_recv.ack(delivery).expect("Failed to ack");
+                            }
+                            other => {
+                                println!("Exchange ended here{:?}", other);
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        println!(
+                            "Exchange - update sell vol: Timeout reached. No message received."
+                        );
+                        ending += 1;
+                        break;
+                    }
+                }
+            }
+
+            // Check up trends
+            let (up_stock_list, uptrend) = StockProfile::detect_up_trend();
+            println!("Exchange: Currently checking on uptrend...");
+            thread::sleep(Duration::from_millis(200)); // NOTE: try this
+            if uptrend {
+                for stock in up_stock_list.iter() {
+                    println!(
+                        "{}Exchange: Stock [{}] was on fire!! - current price: {} {}",
+                        ANSI_BOLD_GREEN,
+                        stock.0,
+                        stock.1.round(),
+                        ANSI_RESET
+                    );
+                    // update STOCK_LIST price
+                    STOCK_LIST::update_stock_price((stock.0).clone(), true);
+                    // send uptrend info for broker 1
+                    let stock_profile_json =
+                        serde_json::to_string(&stock).expect("Failed to serialize");
+                    send_stock_list
+                        .publish(Publish::new(stock_profile_json.as_bytes(), "sentStockTrendingBrk1"))
+                        .expect("Failed to publish");
+                    // send uptrend info for broker 2
+                }
+            }
+
+            // Adding external factor to speed up the cut lose action
+            if trig_news == 2 || trig_news == 4 || trig_news == 5 || trig_news == 7 {
+                let downtrend_news = StockProfile::external_down_trend();
+                let news = &new_title_list[downtrend_news as usize];
+                let message_length = (news.content.to_owned() + " Exchange: Breaking news!! ")
+                    .chars()
+                    .count();
+
+                // Draw the top line of the box
+                println!("--{}--", "-".repeat(message_length + 4)); // +4 for extra spacing
+                println!(
+                    "|  Exchange: Breaking news!! {}  |",
+                    news.content
+                );
+                println!("--{}--", "-".repeat(message_length + 4));
+            }
+
+            // Check down trend
+            let (down_trend_stock, dwntrend) = StockProfile::detect_down_trend();
+            println!("Exchange: Currently checking on downtrend...");
+            if dwntrend {
+                for stock in down_trend_stock.iter() {
+                    println!(
+                        "{}Exchange: Stock [{}] was dropping!! - current price: {} {}",
+                        ANSI_BOLD_RED,
+                        stock.0,
+                        stock.1.round(),
+                        ANSI_RESET
+                   
+                        );
+                    // update stock price
+                    STOCK_LIST::update_stock_price((stock.0).clone(), false);
+                    // send to broker 1
+                    let stock_profile_json =
+                        serde_json::to_string(&stock).expect("Failed to serialize");
+                    send_stock_list
+                        .publish(Publish::new(stock_profile_json.as_bytes(), "sentStockTrendingBrk1"))
+                        .expect("Failed to publish");
+                    // send to broker 2
+                    send_stock_list
+                        .publish(Publish::new(stock_profile_json.as_bytes(), "sentStockTrendingBrk2"))
+                        .expect("Failed to publish");
+                }
+            }
+            // Last round check before ending the exchange threads
+            if ending == 2 && no_cust_val == 10 {
+                println!("Exchange: There isn't have any update on stocks' orders");
+
+                let mut ex_final_ex_clone = ex_final_ex_clone.lock().unwrap();
+                *ex_final_ex_clone = true;
+                break;
+            }
+        }
+        connection.close().expect("Failed to close connection");
+    },
+);

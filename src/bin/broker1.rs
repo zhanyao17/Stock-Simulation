@@ -162,9 +162,9 @@ fn main() -> Result<()> {
                             match chosen_stock {
                                 Some(chosen_stock) => {
                                     // thread::sleep(Duration::from_secs(1));
-                                    println!("Broker 1: had {}successfully purchased [{}] stock {} with {} units for (User {}) - at price: {} cut loss: {} take profit: {}", 
-                                        ANSI_BOLD_GREEN, chosen_stock.name,ANSI_RESET, user_list.num_stock, user_list.id, chosen_stock.value.round(),user_list.cut_loss.round(),
-                                        user_list.take_profit.round());
+                                    println!("Broker 1: had {}successfully purchased [{}] stock {} with {} units for (User {}) - At Price: {} | {}Cut Loss: {}{} | {}Take Profit: {} {}", 
+                                        ANSI_BOLD_GREEN, chosen_stock.name,ANSI_RESET, user_list.num_stock, user_list.id, chosen_stock.value.round(),ANSI_BOLD_RED,user_list.cut_loss.round(),
+                                        ANSI_RESET,ANSI_BOLD_GREEN,user_list.take_profit.round(),ANSI_RESET);
                                     // Save purchase records
                                     PurchaseDetails::add_order(user_list.id, stock_name, user_list.take_profit, user_list.cut_loss, user_list.num_stock);
                                     // Send info back to exchange channel
@@ -194,6 +194,7 @@ fn main() -> Result<()> {
         }
         
         // monitoring -> sell action
+        println!("Broker 1: Monitoring the stokcs...");
         let timeout_selling_monitor_duration = Duration::from_secs(5); // Adjust as needed
         loop {
             match exch_brk1_stock_trend.receiver().recv_timeout(timeout_selling_monitor_duration) {
@@ -224,7 +225,7 @@ fn main() -> Result<()> {
         }
         // last round check before ending the broker1 threads
         if ending == 2{
-            println!("Broker 1 system end with ending == {}",ending);
+            println!("Broker 1 system end with ending");
             break;
         }
     }
