@@ -1,5 +1,7 @@
 use amiquip::{Connection, ConsumerOptions, Exchange, Publish, QueueDeclareOptions, Result,ConsumerMessage};
-use std::{sync::{mpsc::channel, Arc, Mutex}, thread::{self}, time::Duration, vec};
+use scheduled_thread_pool::ScheduledThreadPool;
+use core::num;
+use std::{sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration, vec};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -37,7 +39,6 @@ impl NewsTitle {
             NewsTitle {content: "'Government Announces Tightening of Monetary Policy' - The Chinese News".to_string()},
             NewsTitle {content: "'Tech Giant Faces Regulatory Probe Over Data Privacy Concerns' - BBC News".to_string()},
         ]
-        
     }
 }
 
@@ -89,12 +90,12 @@ impl StockProfile {
     pub fn external_down_trend()->i32{
         let mut rng = rand::thread_rng();
         let num_stock = rng.gen_range(0..3);
+        println!("&&** num_stock: {}",num_stock);
         let mut profiles = STOCK_PROFILES.lock().unwrap();
         let news_topic = rng.gen_range(0..5);
         for _ in 0..num_stock{
             let stock = rng.gen_range(0..profiles.len());
-            println!("** stock name {}",profiles[stock].name);
-            profiles[stock].sold_vol +=15; // increase the sold vol 
+            profiles[stock].sold_vol +=20; // increase the sold vol 
         }
         news_topic
     }
@@ -105,12 +106,12 @@ impl StockProfile {
         let mut stock_up_trend: Vec<(String,f64)> = Vec::new();
         let mut uptrend = false;
         for stock in profiles.iter_mut(){
-            if stock.buy_vol>=15{ // validate how many stock will affect upternd
+            if stock.buy_vol>=30{ // validate how many stock will affect upternd
                 let stock_name_cloned = stock.name.clone();
                 let new_stock_price = stock.cur_price*1.1;
                 stock.cur_price *=1.1;
                 stock_up_trend.push((stock_name_cloned,new_stock_price));
-                stock.buy_vol-=15;
+                stock.buy_vol-=30; // minus back the converted num of stocks
                 uptrend = true;
             }
         }
@@ -230,7 +231,7 @@ fn user_request(id:i8,stock_list: Arc<Mutex<Vec<Stock>>>)-> User{
     let stockname = stock.name.clone();
     let bidprice = stock.value; 
     let takeprofit = stock.value *  (1.0 + rng.gen_range(0.05..=0.1)); 
-    let cutloss = stock.value *  (1.0 - rng.gen_range(0.02..=0.08)); 
+    let cutloss = stock.value *  (1.0 - rng.gen_range(0.02..=0.08));
     // let hldtime = rng.gen_range(3..8);
     let numstock = rng.gen_range(1..=30);
     
@@ -252,19 +253,36 @@ fn main(){
     // internal channel
     let (sl_tx,sl_rx) = channel(); 
 
-    // Exhanges
+    // no of customer
+    let no_cust_ori = Arc::new(Mutex::new(0));
+    let no_cust_ex = Arc::clone(&no_cust_ori);
+    let no_cust_user = Arc::clone(&no_cust_ori);
+
+    // Triggered infinity loop in main threads
+    let ex_final = Arc::new(Mutex::new(false));
+    let ex_final_ex = Arc::clone(&ex_final);
+    let ex_final_main = Arc::clone(&ex_final);
+    // static mut no_cust: Mutex<i32> = Mutex::new(0);
+ 
+    // Exhanges threads #TODO: change to shed threads
+    // let sched = ScheduledThreadPool::new(2); // exchange & user
+    // sched.execute_at_fixed_rate(Duration::from_millis(50), Duration::from_secs(1), move||->Result<()>{
+
+    // });
     thread::spawn(move||->Result<()>{
-        
         /* ---------------------- Sender & Connection--------------------- */
-        // define connections
+        // Define connections
         let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672")?;
         
-        // define sender
+        // Triggered stock news
+        let mut trig_news = 0;
+        
+        // Define sender
         let ex_br_mq = connection.open_channel(None)?; 
         let send_stock_list = Exchange::direct(&ex_br_mq);
 
         /* ---------------------- receiver--------------------- */
-        // define queue for exchange to receive stock's vol info 
+        // Define queue for exchange to receive stock's vol info 
         let stock_pur_vol = ex_br_mq.queue_declare("updatePurVol", QueueDeclareOptions::default())?;
         let stock_sold_vol = ex_br_mq.queue_declare("updateSoldVol", QueueDeclareOptions::default())?;
         
@@ -273,16 +291,23 @@ fn main(){
 
 
         loop{
-            // send list for customer
+            // Detect ending 
+            let mut ending=0;
+            trig_news +=1;
+            
+            // Send list for customer
             println!("Exchange: Stock list publishing..");
-            thread::sleep(Duration::from_secs(3)); // NOTE: try this 
-            sl_tx.send(STOCK_LIST.clone()).unwrap();
-            // send stock list to broker1
+            thread::sleep(Duration::from_secs(1)); 
+            let no_cust_clone = no_cust_ex.lock().unwrap();
+            if *no_cust_clone < 10{sl_tx.send(STOCK_LIST.clone()).unwrap();} // prevent threads panic
+
+            // Send stock list to broker
             let clone_stock_arc = Arc::clone(&STOCK_LIST);
             let vec_stock_list = clone_stock_arc.lock().unwrap().clone();
-            let stock_list_json = serde_json::to_string(&vec_stock_list).expect("Failed to serialize");
-            send_stock_list.publish(Publish::new(stock_list_json.as_bytes(),"sentStockInfoBrk1"))?;
-            println!("***$$ had send stock list to broker1");
+            let stock_list_json = serde_json::to_string(&vec_stock_list).expect("Failed to serialize"); 
+            send_stock_list.publish(Publish::new(stock_list_json.as_bytes(),"sentStockInfoBrk1"))?; // broker1
+            send_stock_list.publish(Publish::new(stock_list_json.as_bytes(),"sentStockInfoBrk2"))?; // broker2
+            println!("Exchange: Had send stock list to broker1 & 2");
             
             // Get purchaase info from broker and update to stock profile
             let timeout_purchasing_monitor = Duration::from_secs(5); // Adjust as needed
@@ -291,6 +316,7 @@ fn main(){
                     Ok (ul)=>{
                         match ul{
                             ConsumerMessage::Delivery(delivery)=>{
+                                ending-=1;
                                 let body = String::from_utf8_lossy(&delivery.body);
                                 let user_list: User= serde_json::from_str(&body).expect("Failed to desialize");
                                 StockProfile::add_stock_profile(user_list.stock_name, 0,user_list.num_stock);
@@ -304,6 +330,7 @@ fn main(){
                     }
                     Err(_)=>{
                         println!("Exchange - update pur vol: Timeout reached. No message received.");
+                        ending+=1;
                         break;
                     }
                 }
@@ -316,6 +343,7 @@ fn main(){
                     Ok(ul)=>{
                         match ul{
                             ConsumerMessage::Delivery(delivery)=>{
+                                ending=0;
                                 let body = String::from_utf8_lossy(&delivery.body);
                                 let received_stocks: Vec<(String, i128)> = serde_json::from_str(&body).expect("Failed to deserialize");
                                 StockProfile::update_sell_vol(received_stocks.clone());
@@ -329,18 +357,19 @@ fn main(){
                     }
                     Err(_)=>{
                         println!("Exchange - update sell vol: Timeout reached. No message received.");
+                        ending+=1;
                         break;
                     }
                 }
             }
 
-            // check up trends
+            // Check up trends
             let (up_stock_list, uptrend) = StockProfile::detect_up_trend();
             println!("Exchange: Currently checking on uptrend...");
             thread::sleep(Duration::from_millis(200)); // NOTE: try this  
             if uptrend{
                 for stock in up_stock_list.iter(){
-                    println!("{}Exchange: Stock [{}] was on fire!!{}",ANSI_BOLD_GREEN,stock.0,ANSI_RESET);
+                    println!("{}Exchange: Stock [{}] was on fire!! - current price: {} {}",ANSI_BOLD_GREEN,stock.0,stock.1.round(),ANSI_RESET);
                     // update STOCK_LIST price
                     STOCK_LIST::update_stock_price((stock.0).clone(),true);
                     // send uptrend info for broker 1
@@ -351,31 +380,46 @@ fn main(){
             }
 
             // Adding external factor to sped up the cut lose action
-            let downtrend_news = StockProfile::external_down_trend();
-            let news = &new_title_list[downtrend_news as usize];
+            if trig_news == 2 || trig_news == 4 || trig_news == 5 || trig_news == 7{
+                let downtrend_news = StockProfile::external_down_trend();
+                let news = &new_title_list[downtrend_news as usize];
+                let message_length = (news.content.to_owned()+" Exchange: Breaking news!! ").chars().count();
+
+                // Draw the top line of the box
+                println!("--{}--", "-".repeat(message_length + 4)); // +4 for extra spacing
+                println!("|  Exchange: Breaking news!! {}  |", news.content);
+                println!("--{}--", "-".repeat(message_length + 4));
+            }
             
-            // check down trend
+            // Check down trend
             let (down_trend_stock,dwntrend) = StockProfile::detect_down_trend();
             println!("Exchange: Currently checking on downstrend...");
             if dwntrend{
-                println!("<<< Exchange: Breaking news!! {}>>>>",news.content);
                 for stock in down_trend_stock.iter(){
-                    println!("{}Exchange: Stock [{}] was dropping!!{}",ANSI_BOLD_RED,stock.0,ANSI_RESET);
+                    println!("{}Exchange: Stock [{}] was dropping!! - current price: {} {}",ANSI_BOLD_RED,stock.0,stock.1.round(),ANSI_RESET);
                     // update stock price
                     STOCK_LIST::update_stock_price((stock.0).clone(),false);
                     // send to broker 1
                     let stock_profile_json = serde_json::to_string(&stock).expect("Failed to serialize");
                     send_stock_list.publish(Publish::new(stock_profile_json.as_bytes(),"sentStockTrendingBrk1"))?;
                     // send to broker 2
+                    send_stock_list.publish(Publish::new(stock_profile_json.as_bytes(),"sentStockTrendingBrk2"))?;
                 }     
             }
+            //  Last round check before ending the exchange threads
+            if ending == 2 && *no_cust_clone == 10{
+                println!("Exchange: There isn't have any update on stocks' orders");
+                
+                let mut ex_final_ex_clone = ex_final_ex.lock().unwrap();
+                *ex_final_ex_clone = true; 
+                break;
+            }
         }
-        connection.close() //#TODO: CHECK ON THIS
+        connection.close()
     });
 
-
     
-    // Users
+    // Users threads #TODO: change to shed threads
     thread::spawn(move|| -> Result<()> {
         let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672")?;
         for i in 1..11{
@@ -393,13 +437,12 @@ fn main(){
                         thread::sleep(Duration::from_millis(5));  
                         let mut rng = rand::thread_rng();
                         // decide buy how many type of stock 
-                        for _ in 1..=rng.gen_range(1..=5){
+                        for _ in 1..=rng.gen_range(1..=10){
                             // let choose_broker = rng.gen_range(1..=2);
                             println!("User{}: System choosing brokers..",i); 
                             thread::sleep(Duration::from_millis(5));  
                             // let choose_broker = rng.gen_range(1..=2);
                             println!("User{}: Order had send to brokers..",i); 
-                            // thread::sleep(Duration::from_millis(5));  
                             let user_req_list = user_request(i,stock_list.clone());
                             let user_list_json =serde_json::to_string(&user_req_list).expect("Failed to serialized");
                             send_order.publish(Publish::new(user_list_json.as_bytes(), "linktobr1"))?;
@@ -412,8 +455,15 @@ fn main(){
                     } 
                 }
             }
+            let mut no_cust_clone = no_cust_user.lock().unwrap();
+            *no_cust_clone+=1;
         }
+        drop(sl_rx);
         connection.close()
     });
-    loop{};
+
+    loop{
+       let ex_final_main_clone = ex_final_main.lock().unwrap();
+       if *ex_final_main_clone == true{break;} 
+    };
 }
