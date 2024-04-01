@@ -118,7 +118,7 @@ fn main() -> Result<()> {
         }
 
         // monitoring -> sell action
-        println!("Broker 2: Monitoring the stokcs...");
+        println!("Broker 2: Monitoring the stocks...");
         let timeout_selling_monitor_duration = Duration::from_secs(5); // Adjust as needed
         // let mut count_passing = 0;
         loop {

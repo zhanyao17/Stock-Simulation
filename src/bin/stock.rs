@@ -413,7 +413,7 @@ fn main(){
                         println!("--{}--", "-".repeat(message_length + 4));
                         print!("--  Affected stock: ");
                         for s in affected_stocks.iter(){
-                            print!("[{}]\t",s);
+                            print!("[{}]  ",s);
                         }
                         print!("--\n")
                     }
@@ -446,17 +446,18 @@ fn main(){
     // Users threads
     sched.execute_at_fixed_rate(
         Duration::from_millis(50),
-         Duration::from_secs(1),
-          move||{
+            Duration::from_secs(1),
+            move||{
             let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672").expect("Failed to open connection");
+            let mut count_user = 0;
             for i in 1..11{
                 println!("User{}: Enter page..",i);
                 println!("User{}: Page loading..",i);
+                count_user+=1;
                 // make sure didn't miss out customer in the laoding page
                 loop{
                     match sl_rx.try_recv(){
                         Ok(stock_list)=>{
-                           
                             let usr_br_mq = connection.open_channel(None).expect("Failed to open channel");
                             let send_order = Exchange::direct(&usr_br_mq);
                             println!("User{}: Viewing the stock list",i); 
@@ -485,11 +486,11 @@ fn main(){
                 let mut no_cust_clone = no_cust_user.lock().unwrap();
                 *no_cust_clone+=1;
             }
-        // Close the connection.
-        connection.close()
-            .unwrap_or_else(|err| eprintln!("Error closing connection: {:?}", err));
-          }
-        );
+            // Close the connection.
+            connection.close().unwrap_or_else(|err| eprintln!("Error closing connection: {:?}", err));
+            if count_user == 10 {thread::sleep(Duration::from_secs(50));} // triggered infinity loop in cust threads
+        }
+    );
 
     loop{
        let ex_final_main_clone = ex_final_main.lock().unwrap();
