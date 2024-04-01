@@ -1,4 +1,4 @@
-use std::{time::Duration};
+use std::{thread, time::Duration};
 use amiquip::{Connection, ConsumerMessage, ConsumerOptions, Exchange, Publish, QueueDeclareOptions, Result};
 // use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use broker1::{User,Stock,PurchaseDetails};
 const ANSI_BOLD_GREEN: &str = "\x1b[1;32m"; // Bold green color
 const ANSI_RESET: &str = "\x1b[0m"; // Reset color and style
 const ANSI_BOLD_RED: &str = "\x1b[1;31m"; // Bold red color
-
+#[warn(dead_code)]
 fn main() -> Result<()> {
     // Open connection.
     let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672")?;
@@ -28,8 +28,8 @@ fn main() -> Result<()> {
     
     // Start a consumer.
     let consumer = stock_list_shared.consume(ConsumerOptions::default())?;
-    let exch_brk1_stock_list= stock_info_queue.consume(ConsumerOptions::default())?;
-    let exch_brk1_stock_trend= stock_trending_queue.consume(ConsumerOptions::default())?;
+    let exch_brk2_stock_list= stock_info_queue.consume(ConsumerOptions::default())?;
+    let exch_brk2_stock_trend= stock_trending_queue.consume(ConsumerOptions::default())?;
 
     /* ---------------------- Sender --------------------- */
     let update_vol_status = Exchange::direct(&channel);
@@ -45,13 +45,13 @@ fn main() -> Result<()> {
         // Get order list
         let timeout_orderlist_duration = Duration::from_secs(5);
         loop{
-            match exch_brk1_stock_list.receiver().recv_timeout(timeout_orderlist_duration) {
+            match exch_brk2_stock_list.receiver().recv_timeout(timeout_orderlist_duration) {
                 Ok (stock_list) =>{
                     match stock_list {
                         ConsumerMessage::Delivery(delivery) => {
                             let stock_list_body = String::from_utf8_lossy(&delivery.body);
                             STOCK_LIST = serde_json::from_str(&stock_list_body).expect("Failed to deserialize");
-                            exch_brk1_stock_list.ack(delivery)?;
+                            exch_brk2_stock_list.ack(delivery)?;
                             break; // loop one time only
                         }
                         other => {
@@ -120,19 +120,30 @@ fn main() -> Result<()> {
         // monitoring -> sell action
         println!("Broker 2: Monitoring the stokcs...");
         let timeout_selling_monitor_duration = Duration::from_secs(5); // Adjust as needed
+        // let mut count_passing = 0;
         loop {
-            match exch_brk1_stock_trend.receiver().recv_timeout(timeout_selling_monitor_duration) {
+            match exch_brk2_stock_trend.receiver().recv_timeout(timeout_selling_monitor_duration) {
                 Ok(stocks) => {
                     match stocks {
                         ConsumerMessage::Delivery(delivery) => {
                             ending=0; // means still got new order comming in
                             let stock_profile_body = String::from_utf8_lossy(&delivery.body);
                             let stock_profile: (String, f64) = serde_json::from_str(&stock_profile_body).expect("Failed to deserialize");
+                            let stock_profile_clone = stock_profile.clone();
                             let sold_result :Vec<(String,i128)> = PurchaseDetails::stock_sell_monitoring(stock_profile.0, stock_profile.1,2);
                             if !sold_result.is_empty(){
                                 let sold_result_json = serde_json::to_string(&sold_result).expect("Failed to serialize");
                                 update_vol_status.publish(Publish::new(sold_result_json.as_bytes(),"updateSoldVol"))?;
-                            }
+                            } 
+                            // else {
+                            //     //TODO: Fix infinity loops
+                            //     println!("&&** Stocksname: {}",stock_profile_clone.0);
+                            //     let stock_profile_json = serde_json::to_string(&stock_profile_clone).expect("Failed to serialize");
+                            //     let _ = update_vol_status.publish(Publish::new(stock_profile_json.as_bytes(),"sentStockTrendingBrk"));
+                            //     // thread::sleep(Duration::from_secs(2));
+                            //     break; // break out
+                            // }
+                            // exch_brk2_stock_trend.ack(delivery)?;
                         }
                         other => {
                             println!("Broker2: Stock trending list ended: {:?}", other);
