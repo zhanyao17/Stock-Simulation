@@ -1,12 +1,13 @@
-use amiquip::{Connection, ConsumerOptions, Exchange, Publish, QueueDeclareOptions, Result,ConsumerMessage};
+use amiquip::{Connection, ConsumerOptions, Exchange, Publish, QueueDeclareOptions,ConsumerMessage};
+use chrono::Local;
 use scheduled_thread_pool::ScheduledThreadPool;
-use std::{sync::{mpsc::channel, Arc, Mutex}, thread, time::Duration, vec};
+use std::{sync::{Arc, Mutex}, thread, time::Duration, vec};
 use rand::Rng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use lazy_static::lazy_static;
-
+use crossbeam_channel::unbounded;
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct Stock{
@@ -23,7 +24,6 @@ pub struct User{
     take_profit:f64,
     cut_loss:f64,
     num_stock:i128,
-    // holding_time: i32, // capture enter time
 }
 
 pub struct NewsTitle{
@@ -57,6 +57,7 @@ impl StockProfile {
         let mut new_profile = true;
         let mut profiles = STOCK_PROFILES.lock().unwrap();
         for stock in profiles.iter_mut(){
+            // Mode on existing stock
             if stock.name == name{
                 stock.buy_vol+=buy_vol;
                 new_profile = false;
@@ -102,7 +103,7 @@ impl StockProfile {
         (news_topic,affected_stock)
     }
 
-    // detect up trend
+    // Detect up trend
     pub fn detect_up_trend() -> (Vec<(String,f64)>,bool){
         let mut profiles = STOCK_PROFILES.lock().unwrap();
         let mut stock_up_trend: Vec<(String,f64)> = Vec::new();
@@ -114,14 +115,14 @@ impl StockProfile {
                 stock.cur_price *=1.0+(0.1*(count as f64)); 
                 let new_stock_price = stock.cur_price;
                 stock_up_trend.push((stock_name_cloned,new_stock_price));
-                uptrend = true;
                 stock.buy_vol-=count * 30; // minus back the converted num of stocks
+                uptrend = true;
             }
         }
         (stock_up_trend,uptrend)
     }
     
-    // detect down trend
+    // Detect down trend
     pub fn detect_down_trend() -> (Vec<(String,f64)>,bool){
         let mut profiles = STOCK_PROFILES.lock().unwrap();
         let mut stock_down_trend: Vec<(String,f64)> = Vec::new();
@@ -215,18 +216,23 @@ lazy_static! {
 
 #[allow(dead_code)]
 impl STOCK_LIST {
+    // Update the original stock price list
     pub fn update_stock_price(name:String,uptrend:bool){
         let mut stocks = STOCK_LIST.lock().unwrap();
+        let profiles = STOCK_PROFILES.lock().unwrap();
         for s in stocks.iter_mut(){
             if s.name == name && uptrend{
-                s.value *= 1.1;
-            }else if s.name == name && !uptrend  {
-                s.value *= 0.9; 
+                for p in profiles.iter(){
+                    if p.name == name{
+                        s.value = p.cur_price;
+                    }
+                }
             }
         }
     }
 }
 
+// Generate user request
 #[allow(dead_code)]
 fn user_request(id:i8,stock_list: Arc<Mutex<Vec<Stock>>>)-> User{
     let mut rng = rand::thread_rng();
@@ -236,10 +242,10 @@ fn user_request(id:i8,stock_list: Arc<Mutex<Vec<Stock>>>)-> User{
     let bidprice = stock.value; 
     let takeprofit = stock.value *  (1.0 + rng.gen_range(0.05..=0.1)); 
     let cutloss = stock.value *  (1.0 - rng.gen_range(0.02..=0.08));
-    // let hldtime = rng.gen_range(3..8);
     let numstock = rng.gen_range(1..=30);
     
-    User{id:id,stock_name:stockname,bid_price:bidprice,take_profit:takeprofit,cut_loss:cutloss,num_stock:numstock}
+    User{id:id,stock_name:stockname,bid_price:bidprice,take_profit:takeprofit,
+        cut_loss:cutloss,num_stock:numstock}
 }
 
 
@@ -254,7 +260,7 @@ fn main(){
     let new_title_list = NewsTitle::gen_content();
 
     // internal channel
-    let (sl_tx,sl_rx) = channel();  //#NOTE: change to crossbeam-channel
+    let (sl_tx,sl_rx) = unbounded();  
 
     // no of customer
     let no_cust_ori = Arc::new(Mutex::new(0));
@@ -270,31 +276,31 @@ fn main(){
     // define num of shed threads
     let sched = ScheduledThreadPool::new(2);
 
-    // Exhanges threads
+    // Exhanges or Broadcaster threads
     sched.execute_at_fixed_rate(
         Duration::from_millis(50), 
         Duration::from_secs(1), 
         move || {
             let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672").expect("Failed to open connection");
         
-            // Triggered stock news
+            // Index stock news
             let mut trig_news = 0;
             
-            // Define sender
+            // Define sender [crossbeam]
             let ex_br_mq = connection.open_channel(None).expect("Failed to open channel");
+
+            /* ---------------------- Exchange Sender--------------------- */ 
             let send_stock_list = Exchange::direct(&ex_br_mq);
 
-            /* ---------------------- receiver--------------------- */
+            /* ---------------------- Exchange receiver--------------------- */
             // Define queue for exchange to receive stock's vol info 
             let stock_pur_vol = ex_br_mq.queue_declare("updatePurVol", QueueDeclareOptions::default())
             .unwrap_or_else(|err| panic!("Error declaring queue: {:?}", err));
             let stock_sold_vol = ex_br_mq.queue_declare("updateSoldVol", QueueDeclareOptions::default())
             .unwrap_or_else(|err| panic!("Error declaring queue: {:?}", err));
             
-            // let ex_pur_recv = stock_pur_vol.consume(ConsumerOptions::default()).expect("Failed to start consumer");
             let ex_pur_recv = stock_pur_vol.consume(ConsumerOptions::default()).unwrap_or_else(|err| panic!("Error starting consumer: {:?}", err));
             let ex_sell_recv = stock_sold_vol.consume(ConsumerOptions::default()).unwrap_or_else(|err| panic!("Error starting consumer: {:?}", err));
-            // let ex_sell_recv = stock_sold_vol.consume(ConsumerOptions::default()).expect("Failed to start consumer");
 
 
             loop{
@@ -339,7 +345,6 @@ fn main(){
                             }
                         }
                         Err(_)=>{
-                            // println!("Exchange - update pur vol: Timeout reached. No message received.");
                             ending+=1;
                             break;
                         }
@@ -379,7 +384,9 @@ fn main(){
                 thread::sleep(Duration::from_millis(200)); // NOTE: try this  
                 if uptrend{
                     for stock in up_stock_list.iter(){
-                        println!("{}Exchange: Stock [{}] was on fire!! - current price: {} {}",ANSI_BOLD_GREEN,stock.0,stock.1.round(),ANSI_RESET);
+                        let local_time = Local::now();
+                        println!("{}Time: {} Exchange: Stock [{}] was on fire!! - current price: {} {}",ANSI_BOLD_GREEN,
+                            local_time.format("%Y-%m-%d %H:%M:%S"),stock.0,stock.1.round(),ANSI_RESET);
                         // update STOCK_LIST price
                         STOCK_LIST::update_stock_price((stock.0).clone(),true);
                         // send uptrend info for broker 1
@@ -408,7 +415,7 @@ fn main(){
                         let news = &new_title_list[downtrend_news as usize];
                         let message_length = (news.content.to_owned()+" Exchange: Breaking news!! ").chars().count();
                         // Draw the top line of the box
-                        println!("--{}--", "-".repeat(message_length + 4)); // +4 for extra spacing
+                        println!("--{}--", "-".repeat(message_length + 4));
                         println!("|  Exchange: Breaking news!! {}  |", news.content);
                         println!("--{}--", "-".repeat(message_length + 4));
                         print!("--  Affected stock: ");
@@ -418,7 +425,8 @@ fn main(){
                         print!("--\n")
                     }
                     for stock in down_trend_stock.iter(){
-                        println!("{}Exchange: Stock [{}] was dropping!! - current price: {} {}",ANSI_BOLD_RED,stock.0,stock.1.round(),ANSI_RESET);
+                        let local_time = Local::now();
+                        println!("{}Time: {} Exchange: Stock [{}] was dropping!! - current price: {} {}",ANSI_BOLD_RED,local_time.format("%Y-%m-%d %H:%M:%S"),stock.0,stock.1.round(),ANSI_RESET);
                         // update stock price
                         STOCK_LIST::update_stock_price((stock.0).clone(),false);
                         // send to broker 1
@@ -448,8 +456,10 @@ fn main(){
         Duration::from_millis(50),
             Duration::from_secs(1),
             move||{
-            let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672").expect("Failed to open connection");
+            let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672").
+                expect("Failed to open connection");
             let mut count_user = 0;
+            // Generate 10 different user
             for i in 1..11{
                 println!("User{}: Enter page..",i);
                 println!("User{}: Page loading..",i);
@@ -459,17 +469,15 @@ fn main(){
                     match sl_rx.try_recv(){
                         Ok(stock_list)=>{
                             let usr_br_mq = connection.open_channel(None).expect("Failed to open channel");
-                            let send_order = Exchange::direct(&usr_br_mq);
+                            let send_order = Exchange::direct(&usr_br_mq); // Usersender
                             println!("User{}: Viewing the stock list",i); 
                             println!("User{}: Selecting stokcs...",i); 
                             thread::sleep(Duration::from_millis(5));  
                             let mut rng = rand::thread_rng();
                             // decide buy how many type of stock 
                             for _ in 1..=rng.gen_range(1..=10){
-                                // let choose_broker = rng.gen_range(1..=2);
                                 println!("User{}: System choosing brokers..",i); 
                                 thread::sleep(Duration::from_millis(5));  
-                                // let choose_broker = rng.gen_range(1..=2);
                                 println!("User{}: Order had send to brokers..",i); 
                                 let user_req_list = user_request(i,stock_list.clone());
                                 let user_list_json =serde_json::to_string(&user_req_list).expect("Failed to serialized");

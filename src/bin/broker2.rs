@@ -1,4 +1,4 @@
-use std::{thread, time::Duration};
+use std::time::Duration;
 use amiquip::{Connection, ConsumerMessage, ConsumerOptions, Exchange, Publish, QueueDeclareOptions, Result};
 // use serde::{Deserialize, Serialize};
 
@@ -12,13 +12,14 @@ const ANSI_RESET: &str = "\x1b[0m"; // Reset color and style
 const ANSI_BOLD_RED: &str = "\x1b[1;31m"; // Bold red color
 #[warn(dead_code)]
 fn main() -> Result<()> {
+    // Enter Broker2's execution
     // Open connection.
     let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672")?;
 
     // Open a channel - None says let the library choose the channel ID.
     let channel = connection.open_channel(None)?;
 
-    /* ---------------------- Receiver --------------------- */
+    /* ---------------------- Broker2 Receiver --------------------- */
     // User order
     let stock_list_shared = channel.queue_declare("linktobr1", QueueDeclareOptions::default())?;
     // Stock list queue
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
     let exch_brk2_stock_list= stock_info_queue.consume(ConsumerOptions::default())?;
     let exch_brk2_stock_trend= stock_trending_queue.consume(ConsumerOptions::default())?;
 
-    /* ---------------------- Sender --------------------- */
+    /* ---------------------- Broker2 Sender --------------------- */
     let update_vol_status = Exchange::direct(&channel);
 
     println!("Waiting for messages. Press Ctrl-C to exit.");
@@ -129,21 +130,12 @@ fn main() -> Result<()> {
                             ending=0; // means still got new order comming in
                             let stock_profile_body = String::from_utf8_lossy(&delivery.body);
                             let stock_profile: (String, f64) = serde_json::from_str(&stock_profile_body).expect("Failed to deserialize");
-                            let stock_profile_clone = stock_profile.clone();
-                            let sold_result :Vec<(String,i128)> = PurchaseDetails::stock_sell_monitoring(stock_profile.0, stock_profile.1,2);
+                            let sold_result :Vec<(String,i128)> = PurchaseDetails::stock_sell_monitoring(stock_profile.0, 
+                                    stock_profile.1,2);
                             if !sold_result.is_empty(){
                                 let sold_result_json = serde_json::to_string(&sold_result).expect("Failed to serialize");
                                 update_vol_status.publish(Publish::new(sold_result_json.as_bytes(),"updateSoldVol"))?;
                             } 
-                            // else {
-                            //     //TODO: Fix infinity loops
-                            //     println!("&&** Stocksname: {}",stock_profile_clone.0);
-                            //     let stock_profile_json = serde_json::to_string(&stock_profile_clone).expect("Failed to serialize");
-                            //     let _ = update_vol_status.publish(Publish::new(stock_profile_json.as_bytes(),"sentStockTrendingBrk"));
-                            //     // thread::sleep(Duration::from_secs(2));
-                            //     break; // break out
-                            // }
-                            // exch_brk2_stock_trend.ack(delivery)?;
                         }
                         other => {
                             println!("Broker2: Stock trending list ended: {:?}", other);

@@ -1,7 +1,7 @@
-use std::{ sync::{ Arc, Mutex}, thread, time::Duration};
+use std::{ sync::{ Arc, Mutex}, time::Duration};
 use amiquip::{Connection, ConsumerMessage, ConsumerOptions, Exchange, Publish, QueueDeclareOptions, Result};
 use serde::{Deserialize, Serialize};
-
+use chrono::{Local};
 // Colour reformating 
 const ANSI_BOLD_GREEN: &str = "\x1b[1;32m"; // Bold green color
 const ANSI_RESET: &str = "\x1b[0m"; // Reset color and style
@@ -54,15 +54,21 @@ impl PurchaseDetails{
         let mut sold_stocks: Vec<(String,i128)> = Vec::new();
         for (index,d) in records.iter_mut().enumerate(){
             if d.stock_name == stock_name{
-                // println!("**&& Stock Name: {} cut_loss: {} | take profit: {} | current price: {}",stock_name,d.cut_loss,d.take_profit,current_stock_price);
                 if current_stock_price <= d.cut_loss {
                     let loss_rate = format!("{:.2}",(((d.cut_loss - current_stock_price)/d.cut_loss) * 100.00));
-                    println!("{}Broker {}: Had sold User {}'s [{}] for cutting loss! [with ↓ {}%] - Price at: {}{}",ANSI_BOLD_RED,broker_no,d.id,d.stock_name,loss_rate,current_stock_price.round(),ANSI_RESET);
+                    // Get the current local time
+                    let local_time = Local::now();
+                    println!("{}Time: {} Broker {}: Had sold User {}'s [{}] for cutting loss! [with ↓ {}%] - Price at: {}{}",
+                        ANSI_BOLD_RED,local_time.format("%Y-%m-%d %H:%M:%S"),broker_no,d.id,d.stock_name,
+                        loss_rate,current_stock_price.round(),ANSI_RESET);
                     to_remove.push(index);
                     sold_stocks.push((d.stock_name.clone(),d.num_stock));
                 }else if current_stock_price >= d.take_profit   {
+                    let local_time = Local::now(); 
                     let earn_rate = format!("{:.2}",(((current_stock_price - d.take_profit)/d.take_profit) * 100.00));
-                    println!("{}Broker 1: Had sold User {}'s [{}] for taking profit! [with ↑ {}%] - Price at: {}{}",ANSI_BOLD_GREEN,d.id,d.stock_name,earn_rate,current_stock_price.round(),ANSI_RESET);
+                    println!("{}Time: {} Broker {}: Had sold User {}'s [{}] for taking profit! [with ↑ {}%] - Price at: {}{}",
+                        ANSI_BOLD_GREEN,local_time.format("%Y-%m-%d %H:%M:%S"),broker_no,d.id,d.stock_name,
+                        earn_rate,current_stock_price.round(),ANSI_RESET);
                     to_remove.push(index);
                     sold_stocks.push((d.stock_name.clone(),d.num_stock));
                 }
@@ -88,13 +94,14 @@ pub fn iterate_stock_list(stock_list: &Vec<Stock>,stock_name:String,bid_price:f6
 
 #[warn(dead_code)]
 fn main() -> Result<()> {
-    // Open connection.
+    // Enter Broker1's execution
+    // Open connection for Broker1.
     let mut connection = Connection::insecure_open("amqp://guest:guest@localhost:5672")?;
 
-    // Open a channel - None says let the library choose the channel ID.
+    // Open a channel for Broker1- None says let the library choose the channel ID.
     let channel = connection.open_channel(None)?;
     
-    /* ---------------------- Receiver --------------------- */
+    /* ---------------------- Broker1 Receiver --------------------- */
     // stock list queue
     let stock_list_shared = channel.queue_declare("linktobr1", QueueDeclareOptions::default())?;
     // users' purchase order
@@ -103,11 +110,11 @@ fn main() -> Result<()> {
     let stock_trending_queue = channel.queue_declare("sentStockTrendingBrk1", QueueDeclareOptions::default())?; 
     
     // Start a broker1 receiver
-    let consumer = stock_list_shared.consume(ConsumerOptions::default())?;
+    let usr_order_list = stock_list_shared.consume(ConsumerOptions::default())?;
     let exch_brk1_stock_list= stock_info_queue.consume(ConsumerOptions::default())?;
     let exch_brk1_stock_trend= stock_trending_queue.consume(ConsumerOptions::default())?;
     
-    /* ---------------------- Sender --------------------- */
+    /* ---------------------- Broker2 Sender --------------------- */
     let update_vol_status = Exchange::direct(&channel);
     
     println!("Waiting for messages. Press Ctrl-C to exit.");
@@ -146,7 +153,7 @@ fn main() -> Result<()> {
         // User request -> buy
         let timeout_purchase_duration = Duration::from_secs(5); // Adjust as needed
         loop {
-            match consumer.receiver().recv_timeout(timeout_purchase_duration) {
+            match usr_order_list.receiver().recv_timeout(timeout_purchase_duration) {
                 Ok(message) => {
                     match message {
                         ConsumerMessage::Delivery(delivery) => {
@@ -176,7 +183,7 @@ fn main() -> Result<()> {
                                         ANSI_BOLD_RED, ANSI_RESET, user_list_clone.stock_name,user_list.id);
                                 }
                             }
-                            consumer.ack(delivery)?;
+                            usr_order_list.ack(delivery)?;
                         }
                         other => {
                             println!("Consumer ended: {:?}", other);
@@ -204,21 +211,11 @@ fn main() -> Result<()> {
                             ending=0; // means still got new order comming in
                             let stock_profile_body = String::from_utf8_lossy(&delivery.body);
                             let stock_profile: (String, f64) = serde_json::from_str(&stock_profile_body).expect("Failed to deserialize");
-                            let stock_profile_clone = stock_profile.clone();
                             let sold_result :Vec<(String,i128)> = PurchaseDetails::stock_sell_monitoring(stock_profile.0, stock_profile.1,1);
                             if !sold_result.is_empty(){
                                 let sold_result_json = serde_json::to_string(&sold_result).expect("Failed to serialize");
                                 update_vol_status.publish(Publish::new(sold_result_json.as_bytes(),"updateSoldVol"))?;
                             }
-                            // else {
-                            //     //TODO: Fix infinity passing back 
-                            //     println!("&&** Stocksname: {}",stock_profile_clone.0);
-                            //     let stock_profile_json = serde_json::to_string(&stock_profile_clone).expect("Failed to serialize");
-                            //     let _ = update_vol_status.publish(Publish::new(stock_profile_json.as_bytes(),"sentStockTrendingBrk"));
-                            //     // thread::sleep(Duration::from_secs(2));
-                            //     break;
-                            // }
-                            // exch_brk1_stock_trend.ack(delivery)?;
                         }
                         other => {
                             println!("Broker1: Stock trending list ended: {:?}", other);
