@@ -1,25 +1,33 @@
-# Stock-Simulation
-Using rust to run a simulation of stock trading system 
+# Overview
+A mini project using rust to build a stock simulation system
+
+## Hands on tools 
+- rust
+- rabbitmq
+- amiquip (crates)
+
+# Flowchart
+<p align="center" width="100%">
+    <img src="image/Stock-Simulation-flow.jpg" width="700">
+</p>
 
 
-# Documentation
-Languages
-- Safety issues in rust (error handling)
+# File structure 
+| Files  | Overview |
+| ------------- | ------------- |
+| /src/bin/stock.rsl  | This file store the user threads and exchanges threads. All the action such as generating new stock request order, update stock price, update stock trends info will be defined and carry out in this file. |
+| /src/bin/broker1.rs  | This is files that store the first broker in these simulations system. This file will be linked to the stock.rs via RabbitMQ protocol tools and Amiquip library. Action such as purchasing order (based on the user preferences), selling stocks, and sending buy or sell volumes of the stock back to the exchange threads. |
+| /src/bin/broker2.rs  | This is the files that store the second broker in this simulation system. Action will be like the broker1.rs files. |
 
-- RabbitMQ (AMQP)
-    - Rabbitmq vs kafka
-    - Latency: RabbitMQ can introduce some latency due to message queuing and routing processes. For applications requiring ultra-low latency, such as high-frequency trading or real-time gaming, RabbitMQ might not be the best choice. In such cases, you might need a messaging solution optimized for low latency, like ZeroMQ or Redis Pub/Sub.
-    - Throughput: RabbitMQ is capable of handling high message throughput, especially when configured with multiple nodes in a cluster. However, achieving high throughput requires proper configuration and optimization. For extremely high-throughput real-time systems, specialized solutions might be required.
-    - Message Ordering: RabbitMQ guarantees message ordering within a single queue. However, if your application requires strict global message ordering across multiple queues or topics, achieving this in RabbitMQ can be challenging and might require additional synchronization mechanisms.
-    - Scalability: RabbitMQ can scale horizontally by setting up clusters with multiple nodes. This allows you to distribute message processing across multiple servers for increased throughput and fault tolerance. However, managing a RabbitMQ cluster introduces additional complexity compared to standalone deployments.
-    - Reliability: RabbitMQ provides features like durable queues, message acknowledgments, and persistent message storage to ensure reliable message delivery. This makes it suitable for many real-time applications where message reliability is critical.
-    - Integration: RabbitMQ integrates well with various programming languages and platforms, making it suitable for building real-time systems with diverse technology stacks. It supports many protocols and client libraries, facilitating integration with existing applications and services.
-- amiquip
-- benchmarks
-- receive witha specific time duration
+# Background studies
+![alt text](/image/image.png)
+![alt text](/image/image-1.png)
 
+## Overview of latency and througput result
+![alt text](/image/image-2.png)
+# Findings
+<div style="text-align: justify"> 
+There are also limitation founded out on the Rust language which is inconsistent compiling time and this also been mentioned by many other researchers (Bang et al., 2023; Chen et al., 2023). The scheduling flow might be disrupted by issues such as delays in compiling time or execution time, particularly in scenarios where strict timing constraints are involved. For instance, consider a situation where brokers expect to receive an order list within a maximum timeframe of 2 seconds. Despite both the exchange and broker functionalities being executed concurrently, delays in compiling or executing the exchange threads (as defined in the stock.rs file) could potentially cause the order list not to be sent to the brokers within the expected timeframe. Such disruptions highlight the importance of optimizing performance and minimizing latency in systems where timely communication and coordination are critical.
+</div>
 
-# Todo:
-- Clean up the command in stock.rs
-- Final run thru
-- See whether nid change to crossbeam unbounb :)
+# 
