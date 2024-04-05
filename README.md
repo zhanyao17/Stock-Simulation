@@ -7,7 +7,7 @@ A mini project using rust to build a stock simulation system
 - amiquip (crates)
 
 # Flowchart
-<p align="center" width="100%">
+<p align="left" width="100%">
     <img src="image/Stock-Simulation-flow.jpg" width="700">
 </p>
 
