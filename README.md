@@ -25,9 +25,12 @@ A mini project using rust to build a stock simulation system
 
 ## Overview of latency and througput result
 ![alt text](/image/image-2.png)
-# Findings
+
+# Output result
+![alt text](/image/demo-output.png)
+
+
+# Limitation
 <div style="text-align: justify"> 
 There are also limitation founded out on the Rust language which is inconsistent compiling time and this also been mentioned by many other researchers (Bang et al., 2023; Chen et al., 2023). The scheduling flow might be disrupted by issues such as delays in compiling time or execution time, particularly in scenarios where strict timing constraints are involved. For instance, consider a situation where brokers expect to receive an order list within a maximum timeframe of 2 seconds. Despite both the exchange and broker functionalities being executed concurrently, delays in compiling or executing the exchange threads (as defined in the stock.rs file) could potentially cause the order list not to be sent to the brokers within the expected timeframe. Such disruptions highlight the importance of optimizing performance and minimizing latency in systems where timely communication and coordination are critical.
 </div>
-
-# 
